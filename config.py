@@ -38,12 +38,20 @@ INSTRUMENTS = {
     "GLD": {
         "kind": "equity",
         "strategy": "trend_following",
-        "params": {"trailing_atr_mult": 3.0},
+        # Per-symbol ADX floor for entries (see MEAN_REVERSION_ADX_MAX below
+        # for why this is per-symbol, not shared): a 12-month backtest sweep
+        # showed GLD's crossovers stay good down to a low bar (15), while a
+        # higher one starts cutting its winners.
+        "params": {"trailing_atr_mult": 3.0, "trend_adx_min": 15},
     },
     "USO": {
         "kind": "equity",
         "strategy": "trend_following",
-        "params": {"trailing_atr_mult": 3.0},
+        # USO whipsawed badly (8 straight losing trades, Sept-Nov 2025) at
+        # ADX as high as ~21 — needs a much higher floor than GLD to avoid
+        # trading its crossovers during chop. Note: at 25, the 12-month
+        # backtest only left 1 trade — directionally right, not yet proven.
+        "params": {"trailing_atr_mult": 3.0, "trend_adx_min": 25},
     },
 }
 
