@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pandas as pd
 from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Sparkline, Static
@@ -174,19 +175,26 @@ class StrategiesScreen(Screen):
                 latest = bars.iloc[-1]
                 if runner.strategy_name == "mean_reversion":
                     z = latest.get("zscore")
+                    adx = latest.get("adx")
                     threshold = config.INSTRUMENTS[symbol]["params"]["z_entry"]
-                    lines.append(f"  {symbol}  Z-Score: {z:+.2f}   Threshold: +/-{threshold}   Signal: {sig_text}")
+                    regime = "RANGING" if pd.notna(adx) and adx < config.MEAN_REVERSION_ADX_MAX else "TRENDING (blocked)"
+                    lines.append(
+                        f"  {symbol}  Z-Score: {z:+.2f}   Threshold: +/-{threshold}   "
+                        f"ADX: {adx:.1f} [{regime}]   Signal: {sig_text}"
+                    )
                 elif runner.strategy_name == "momentum_breakout":
                     hi = latest.get("donchian_hi")
                     vol_avg = latest.get("vol_avg")
                     vol_ratio = latest["volume"] / vol_avg if vol_avg else 0
+                    adx = latest.get("adx")
+                    regime = "TRENDING" if pd.notna(adx) and adx >= config.MOMENTUM_BREAKOUT_ADX_MIN else "RANGING (blocked)"
                     lines.append(
                         f"  {symbol}  20H High: {hi:.2f}  Price: {latest['close']:.2f}  "
-                        f"Volume: {vol_ratio:.2f}x  ATR: {latest['atr']:.2f}  Signal: {sig_text}"
+                        f"Volume: {vol_ratio:.2f}x  ATR: {latest['atr']:.2f}  ADX: {adx:.1f} [{regime}]  Signal: {sig_text}"
                     )
                 elif runner.strategy_name == "trend_following":
                     lines.append(
-                        f"  {symbol}  EMA50: {latest['ema_fast']:.2f}  EMA200: {latest['ema_slow']:.2f}  Signal: {sig_text}"
+                        f"  {symbol}  EMA20: {latest['ema_fast']:.2f}  EMA50: {latest['ema_slow']:.2f}  Signal: {sig_text}"
                     )
                 pos = pf.get_position(symbol)
                 if pos is not None:

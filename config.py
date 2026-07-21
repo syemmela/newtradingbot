@@ -62,18 +62,26 @@ STRATEGY_TIMEFRAMES = {
     "trend_following": {"source": "1Hour", "poll_seconds": 60 * 60, "needs_market_hours": True},
 }
 
-# Bars fetched per tick. 250 gives EMA200 enough warm-up headroom after
-# resampling 1H bars 4:1 for trend_following (~1000 1H bars needed).
+# Bars fetched per tick. trend_following's 400 1H bars resample down to
+# ~100 4H bars — comfortable headroom over EMA50's warmup.
 LOOKBACK_BARS = {
     "mean_reversion": 60,
     "momentum_breakout": 60,
-    "trend_following": 1000,
+    "trend_following": 400,
 }
 
 RISK_PER_TRADE_PCT = 0.01  # 1% of equity per ATR of adverse move, and the hard stop distance
 ATR_PERIOD = 14
 
 MAX_DRAWDOWN_PCT = 0.10  # circuit breaker: halt new entries past this drawdown from peak equity
+
+# Regime filter (ADX): mean reversion only enters when the market ISN'T
+# trending (ranging favors reversion), momentum breakout only enters when
+# it IS trending (a real trend favors breakout continuation over chop).
+# Exits are never gated by this — only new entries.
+ADX_PERIOD = 14
+MEAN_REVERSION_ADX_MAX = 20
+MOMENTUM_BREAKOUT_ADX_MIN = 25
 
 # Backtest fill assumptions: Alpaca is commission-free, but every fill still
 # crosses the spread/moves the book a bit — modeled as a flat 0.05% adverse

@@ -45,6 +45,33 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return true_range.rolling(period).mean()
 
 
+def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average Directional Index — trend-strength regime filter.
+
+    Conventionally: ADX < 20 means the market is ranging/choppy (favorable
+    for mean reversion), ADX > 25 means a real trend is underway
+    (favorable for momentum breakout continuation). Wilder's smoothing is
+    approximated here with ewm(alpha=1/period), the common practical
+    substitute.
+    """
+    high, low, close = df["high"], df["low"], df["close"]
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+    prev_close = close.shift()
+    true_range = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    ).max(axis=1)
+    smoothed_tr = true_range.ewm(alpha=1 / period, adjust=False).mean()
+
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / smoothed_tr
+    minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / smoothed_tr
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    return dx.ewm(alpha=1 / period, adjust=False).mean()
+
+
 def resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     """Resample 1-bar-granularity OHLCV into a coarser timeframe (e.g. '4h').
 

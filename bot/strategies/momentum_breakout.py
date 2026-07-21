@@ -2,6 +2,13 @@
 confirmation. BTC/USD only, and Alpaca does not allow shorting crypto —
 a breakdown below the 20-low only ever exits an existing long, never
 opens a short (see config.INSTRUMENTS["BTC/USD"]["params"]["shortable"]).
+
+Gated by an ADX regime filter: new entries only fire when ADX is above
+config.MOMENTUM_BREAKOUT_ADX_MIN (a real trend is underway) — a 6-month
+backtest showed this strategy losing consistently across every
+period/volume/ATR combination tried, with a low win rate suggesting
+most "breakouts" were false ones in a choppy, non-trending market. Exits
+are never gated; getting out of a position doesn't depend on regime.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ def compute_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     df["donchian_lo"] = channel["lo"].shift(1)
     df["vol_avg"] = channel["vol_avg"].shift(1)
     df["atr"] = indicators.atr(df, config.ATR_PERIOD)
+    df["adx"] = indicators.adx(df, config.ADX_PERIOD)
     return df
 
 
@@ -55,9 +63,12 @@ def evaluate(df: pd.DataFrame, symbol: str, position: Position | None) -> Signal
             return Signal(symbol, "momentum_breakout", "exit", price, ts, f"breakout vol={vol_ratio:.2f}x")
         return None
 
-    # flat: look for a fresh breakout
+    # flat: look for a fresh breakout, but only when a real trend is underway
+    adx = latest.get("adx")
+    if pd.isna(adx) or adx < config.MOMENTUM_BREAKOUT_ADX_MIN:
+        return None
     if price > latest["donchian_hi"] and volume_confirmed:
-        return Signal(symbol, "momentum_breakout", "long", price, ts, f"breakout vol={vol_ratio:.2f}x")
+        return Signal(symbol, "momentum_breakout", "long", price, ts, f"breakout vol={vol_ratio:.2f}x, adx={adx:.1f}")
     if shortable and price < latest["donchian_lo"] and volume_confirmed:
-        return Signal(symbol, "momentum_breakout", "short", price, ts, f"breakdown vol={vol_ratio:.2f}x")
+        return Signal(symbol, "momentum_breakout", "short", price, ts, f"breakdown vol={vol_ratio:.2f}x, adx={adx:.1f}")
     return None
