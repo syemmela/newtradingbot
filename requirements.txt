@@ -1,5 +1,5 @@
 pandas>=2.2.3
 numpy>=1.26
-alpaca-trade-api==3.2.0
+alpaca-py>=0.43
 textual>=0.60
 python-dotenv>=1.0

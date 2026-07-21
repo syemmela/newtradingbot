@@ -8,7 +8,6 @@ load_dotenv()
 
 API_KEY_ID = os.environ.get("APCA_API_KEY_ID", "")
 API_SECRET_KEY = os.environ.get("APCA_API_SECRET_KEY", "")
-API_BASE_URL = os.environ.get("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
 DATA_FEED = os.environ.get("APCA_DATA_FEED", "iex")
 PAPER_TRADING = os.environ.get("PAPER_TRADING", "true").lower() == "true"
 
