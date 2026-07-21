@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+logs/
+trades.csv
+daily_pnl.csv
