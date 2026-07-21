@@ -11,6 +11,7 @@ import asyncio
 import logging
 import math
 import time
+from datetime import datetime, timezone
 
 import config
 from bot import risk_manager
@@ -24,6 +25,59 @@ STRATEGY_MODULES = {
     "momentum_breakout": momentum_breakout,
     "trend_following": trend_following,
 }
+
+
+async def reconcile_positions(broker, portfolio) -> None:
+    """Adopt any pre-existing broker positions in our 5 instruments into
+    the portfolio's tracker, so stops get enforced from the first tick
+    instead of leaving a real position unmanaged after a restart.
+
+    We don't know the position's original entry ATR, so stops are set
+    fresh from current ATR/price — a safe, conservative default, not a
+    reconstruction of whatever stop it actually started with.
+    """
+    await asyncio.to_thread(portfolio.sync_from_broker)  # real equity, not the 100k placeholder default
+    raw_positions = await asyncio.to_thread(broker.get_positions)
+    for raw in raw_positions:
+        symbol = raw.symbol
+        if symbol not in config.INSTRUMENTS or portfolio.get_position(symbol) is not None:
+            continue
+
+        strategy_name = config.INSTRUMENTS[symbol]["strategy"]
+        module = STRATEGY_MODULES[strategy_name]
+        cfg = config.STRATEGY_TIMEFRAMES[strategy_name]
+        raw_bars = await asyncio.to_thread(broker.get_bars, symbol, cfg["source"], config.LOOKBACK_BARS[strategy_name])
+        if raw_bars.empty:
+            logger.warning("%s: could not reconcile existing position, no bar data available", symbol)
+            continue
+        bars = module.prepare_bars(raw_bars)
+        bars = module.compute_indicators(bars, symbol)
+        if bars.empty:
+            logger.warning("%s: could not reconcile existing position, no indicator data available", symbol)
+            continue
+
+        latest = bars.iloc[-1]
+        latest_price = float(latest["close"])
+        latest_atr = float(latest["atr"]) if not math.isnan(latest["atr"]) else None
+        side = "long" if raw.side.value == "long" else "short"
+        qty = abs(float(raw.qty))
+        entry_price = float(raw.avg_entry_price)
+        atr_mult = config.INSTRUMENTS[symbol]["params"].get("trailing_atr_mult", 2.0)
+        atr_for_stops = latest_atr if latest_atr is not None else abs(latest_price - entry_price) or 1.0
+
+        position = Position(
+            symbol=symbol,
+            strategy=strategy_name,
+            side=side,
+            qty=qty,
+            entry_price=entry_price,
+            entry_time=datetime.now(timezone.utc),
+            atr_at_entry=atr_for_stops,
+            trailing_stop_price=risk_manager.initial_trailing_stop(latest_price, atr_for_stops, side, atr_mult),
+            hard_stop_price=risk_manager.hard_stop_price(entry_price, side, portfolio.equity, qty),
+        )
+        await portfolio.open_position(position)
+        logger.info("%s: reconciled existing %s position qty=%s @ %.2f", symbol, side, qty, entry_price)
 
 
 class StrategyRunner:

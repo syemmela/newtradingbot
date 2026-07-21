@@ -260,7 +260,7 @@ class BacktestScreen(Screen):
 
     async def _do_backtest(self) -> None:
         app = self.app
-        results = await backtest.run_all_backtests(app.broker, months=6)
+        results = await backtest.run_all_backtests(app.broker, months=config.BACKTEST_MONTHS)
         table = self.query_one("#backtest_table", DataTable)
         table.clear()
         for symbol, result in results.items():
@@ -269,15 +269,14 @@ class BacktestScreen(Screen):
                 symbol, str(result.trades), f"{result.win_rate:.1f}%", pf_display,
                 f"{result.sharpe:.2f}", f"{result.max_dd:.1f}%", f"{result.total_return_pct:+.1f}%",
             )
-        summary = backtest.combined_summary(results)
+        combined = await backtest.run_combined_backtest(app.broker, months=config.BACKTEST_MONTHS)
         self.query_one("#backtest_summary", Static).update(
-            f"COMBINED PORTFOLIO   Return {summary['total_return_pct']:+.1f}%   "
-            f"Sharpe {summary['sharpe']:.2f}   Max DD {summary['max_dd']:.1f}%"
+            f"COMBINED PORTFOLIO (correlation filter active)   Return {combined.total_return_pct:+.1f}%   "
+            f"Sharpe {combined.sharpe:.2f}   Max DD {combined.max_dd:.1f}%   Trades {combined.trades}"
         )
         self.query_one("#backtest_hint", Static).update("Backtest complete. Press B to re-run.")
-        any_symbol = next(iter(results), None)
-        if any_symbol:
-            self.query_one("#backtest_curve", Sparkline).data = results[any_symbol].equity_curve
+        if combined.equity_curve:
+            self.query_one("#backtest_curve", Sparkline).data = combined.equity_curve
 
 
 class ReportsScreen(Screen):

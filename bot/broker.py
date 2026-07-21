@@ -121,6 +121,9 @@ class Broker:
         )
         self._trading.submit_order(request)
 
+    def get_positions(self):
+        return self._trading.get_all_positions()
+
     def get_position_qty(self, symbol: str) -> float:
         try:
             position = self._trading.get_open_position(symbol)

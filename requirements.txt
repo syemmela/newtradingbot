@@ -3,3 +3,4 @@ numpy>=1.26
 alpaca-py>=0.43
 textual>=0.60
 python-dotenv>=1.0
+matplotlib>=3.9

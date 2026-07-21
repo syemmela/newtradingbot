@@ -72,7 +72,7 @@ class Portfolio:
         async with self._lock:
             self.positions[position.symbol] = position
 
-    async def close_position(self, symbol: str, exit_price: float) -> TradeRecord | None:
+    async def close_position(self, symbol: str, exit_price: float, timestamp: datetime | None = None) -> TradeRecord | None:
         async with self._lock:
             pos = self.positions.pop(symbol, None)
             if pos is None:
@@ -80,7 +80,7 @@ class Portfolio:
             sign = 1 if pos.side == "long" else -1
             pnl = (exit_price - pos.entry_price) * pos.qty * sign
             record = TradeRecord(
-                timestamp=datetime.now(timezone.utc),
+                timestamp=timestamp or datetime.now(timezone.utc),
                 symbol=symbol,
                 direction=pos.side,
                 entry_price=pos.entry_price,

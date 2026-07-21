@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from textual.app import App
 
-from bot.engine import Engine
+from bot.engine import Engine, reconcile_positions
 from bot.portfolio import Portfolio
 from bot.tui.screens import (
     BacktestScreen,
@@ -72,8 +72,12 @@ class TradingApp(App):
 
     def on_mount(self) -> None:
         self.push_screen("dashboard")
-        self.run_worker(self.engine.run(), name="engine", exclusive=True)
+        self.run_worker(self._start_engine(), name="engine", exclusive=True)
         self.set_interval(5.0, self._mark_to_market_tick)
+
+    async def _start_engine(self) -> None:
+        await reconcile_positions(self.broker, self.portfolio)
+        await self.engine.run()
 
     def _mark_to_market_tick(self) -> None:
         prices: dict[str, float] = {}

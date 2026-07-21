@@ -5,3 +5,4 @@ __pycache__/
 logs/
 trades.csv
 daily_pnl.csv
+backtest_results.png

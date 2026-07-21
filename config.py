@@ -74,3 +74,10 @@ RISK_PER_TRADE_PCT = 0.01  # 1% of equity per ATR of adverse move, and the hard 
 ATR_PERIOD = 14
 
 MAX_DRAWDOWN_PCT = 0.10  # circuit breaker: halt new entries past this drawdown from peak equity
+
+# Backtest fill assumptions: Alpaca is commission-free, but every fill still
+# crosses the spread/moves the book a bit — modeled as a flat 0.05% adverse
+# slippage applied to both entries and exits.
+BACKTEST_SLIPPAGE_PCT = 0.0005
+BACKTEST_COMMISSION_PER_TRADE = 0.0
+BACKTEST_MONTHS = 6
