@@ -98,7 +98,7 @@ class DashboardScreen(Screen):
                 signal = runner.latest_signals.get(symbol)
                 state = "ACTIVE" if pf.get_position(symbol) else "WAITING"
                 sig_text = signal.action.upper() if signal else "HOLD"
-                parts.append(f"{symbol} ● {state} [{sig_text}]")
+                parts.append(f"{symbol} ● {state} ({sig_text})")
             status_lines.append(f"{STRATEGY_LABELS[strategy_name].upper()}: " + "  ".join(parts))
         self.query_one("#strategy_status", Static).update("\n".join(status_lines))
 
@@ -180,7 +180,7 @@ class StrategiesScreen(Screen):
                     regime = "RANGING" if pd.notna(adx) and adx < config.MEAN_REVERSION_ADX_MAX else "TRENDING (blocked)"
                     lines.append(
                         f"  {symbol}  Z-Score: {z:+.2f}   Threshold: +/-{threshold}   "
-                        f"ADX: {adx:.1f} [{regime}]   Signal: {sig_text}"
+                        f"ADX: {adx:.1f} ({regime})   Signal: {sig_text}"
                     )
                 elif runner.strategy_name == "momentum_breakout":
                     hi = latest.get("donchian_hi")
@@ -190,7 +190,7 @@ class StrategiesScreen(Screen):
                     regime = "TRENDING" if pd.notna(adx) and adx >= config.MOMENTUM_BREAKOUT_ADX_MIN else "RANGING (blocked)"
                     lines.append(
                         f"  {symbol}  20H High: {hi:.2f}  Price: {latest['close']:.2f}  "
-                        f"Volume: {vol_ratio:.2f}x  ATR: {latest['atr']:.2f}  ADX: {adx:.1f} [{regime}]  Signal: {sig_text}"
+                        f"Volume: {vol_ratio:.2f}x  ATR: {latest['atr']:.2f}  ADX: {adx:.1f} ({regime})  Signal: {sig_text}"
                     )
                 elif runner.strategy_name == "trend_following":
                     lines.append(
