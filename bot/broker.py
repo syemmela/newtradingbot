@@ -7,6 +7,8 @@ not directly.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pandas as pd
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
 from alpaca.data.historical.stock import StockHistoricalDataClient
@@ -24,9 +26,25 @@ _TIMEFRAME_MAP = {
     "1Day": TimeFrame(1, TimeFrameUnit.Day),
 }
 
+_MINUTES_PER_BAR = {"15Min": 15, "1Hour": 60, "1Day": 1440}
+
+# Regular equity session is ~390 minutes/day, 5 of 7 calendar days. Padded
+# generously (1.4x) so holiday clusters don't force a retry in steady state.
+_EQUITY_SESSION_MINUTES_PER_DAY = 390
+_EQUITY_CALENDAR_PADDING = (7 / 5) * 1.4
+
 
 def is_crypto(symbol: str) -> bool:
     return "/" in symbol
+
+
+def _initial_lookback_minutes(timeframe: str, limit: int, crypto: bool) -> float:
+    total_bar_minutes = _MINUTES_PER_BAR[timeframe] * limit
+    if crypto:
+        return total_bar_minutes * 1.5  # trades 24/7, just pad for gaps
+    trading_days_needed = total_bar_minutes / _EQUITY_SESSION_MINUTES_PER_DAY
+    calendar_days_needed = trading_days_needed * _EQUITY_CALENDAR_PADDING
+    return calendar_days_needed * 1440
 
 
 def _bars_df(bar_set, symbol: str) -> pd.DataFrame:
@@ -53,14 +71,33 @@ class Broker:
         return self._trading.get_clock()
 
     def get_bars(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+        """Fetch the most recent `limit` bars.
+
+        alpaca-py's `limit` alone (no `start`) does NOT mean "last N bars
+        ending now" — without a `start` it silently caps to a narrow
+        default window, and passing `start` + `limit` together returns the
+        EARLIEST `limit` bars from `start` forward, not the most recent
+        ones. So instead: fetch everything from a generously-sized `start`
+        to now with no `limit`, then take `.tail(limit)` ourselves. One
+        retry with a 3x wider window covers holiday clusters etc.
+        """
         tf = _TIMEFRAME_MAP[timeframe]
-        if is_crypto(symbol):
-            request = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=tf, limit=limit)
-            bar_set = self._crypto_data.get_crypto_bars(request)
-        else:
-            request = StockBarsRequest(symbol_or_symbols=symbol, timeframe=tf, limit=limit, feed=config.DATA_FEED)
-            bar_set = self._stock_data.get_stock_bars(request)
-        return _bars_df(bar_set, symbol)
+        crypto = is_crypto(symbol)
+        lookback_minutes = _initial_lookback_minutes(timeframe, limit, crypto)
+        df = pd.DataFrame()
+        for attempt in range(2):
+            start = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
+            if crypto:
+                request = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=tf, start=start.isoformat())
+                bar_set = self._crypto_data.get_crypto_bars(request)
+            else:
+                request = StockBarsRequest(symbol_or_symbols=symbol, timeframe=tf, start=start.isoformat(), feed=config.DATA_FEED)
+                bar_set = self._stock_data.get_stock_bars(request)
+            df = _bars_df(bar_set, symbol)
+            if len(df) >= limit:
+                break
+            lookback_minutes *= 3
+        return df.tail(limit)
 
     def get_historical_bars(self, symbol: str, timeframe: str, start: str, end: str) -> pd.DataFrame:
         """Fetch a date-ranged run of bars for backtesting (as opposed to
