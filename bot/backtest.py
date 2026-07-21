@@ -288,7 +288,10 @@ async def run_combined_backtest(
 
 
 def render_equity_curve_chart(
-    combined: CombinedBacktestResult, per_symbol: dict[str, BacktestResult], path: str = "backtest_results.png"
+    combined: CombinedBacktestResult,
+    per_symbol: dict[str, BacktestResult],
+    path: str = "backtest_results.png",
+    months: int = config.BACKTEST_MONTHS,
 ) -> None:
     import matplotlib
 
@@ -304,7 +307,7 @@ def render_equity_curve_chart(
             curve = result.equity_curve[-len(result.timestamps):]
             ax.plot(result.timestamps, curve, label=symbol, linewidth=1, alpha=0.6)
 
-    ax.set_title(f"Backtest Equity Curves ({config.BACKTEST_MONTHS} Months)")
+    ax.set_title(f"Backtest Equity Curves ({months} Months)")
     ax.set_xlabel("Date")
     ax.set_ylabel("Equity ($)")
     ax.legend(loc="upper left", fontsize=8)
@@ -315,7 +318,9 @@ def render_equity_curve_chart(
     plt.close(fig)
 
 
-def print_summary_table(per_symbol: dict[str, BacktestResult], combined: CombinedBacktestResult) -> None:
+def print_summary_table(
+    per_symbol: dict[str, BacktestResult], combined: CombinedBacktestResult, months: int = config.BACKTEST_MONTHS
+) -> None:
     columns = (
         f"{'Symbol':10s} {'Strategy':18s} {'Trades':>7s} {'Win %':>7s} "
         f"{'Avg Win':>10s} {'Avg Loss':>10s} {'PF':>6s} {'Sharpe':>7s} {'Max DD':>8s} {'Return':>8s}"
@@ -341,12 +346,12 @@ def print_summary_table(per_symbol: dict[str, BacktestResult], combined: Combine
     if combined.sharpe < 0:
         flagged.append(("COMBINED", "portfolio", combined.sharpe))
     if flagged:
-        print(f"FLAGGED (negative Sharpe over {config.BACKTEST_MONTHS} months — consider adjusting parameters):")
+        print(f"FLAGGED (negative Sharpe over {months} months — consider adjusting parameters):")
         for symbol, strategy_name, sharpe in flagged:
             label = STRATEGY_LABELS.get(strategy_name, strategy_name)
             print(f"  - {symbol} ({label}): Sharpe {sharpe:.2f}")
     else:
-        print(f"No strategies flagged — all Sharpe ratios positive over the {config.BACKTEST_MONTHS}-month window.")
+        print(f"No strategies flagged — all Sharpe ratios positive over the {months}-month window.")
 
 
 async def run_full_report(
@@ -354,8 +359,8 @@ async def run_full_report(
 ) -> tuple[dict[str, BacktestResult], CombinedBacktestResult]:
     per_symbol = await run_all_backtests(broker, months=months)
     combined = await run_combined_backtest(broker, months=months)
-    render_equity_curve_chart(combined, per_symbol, path=output_path)
-    print_summary_table(per_symbol, combined)
+    render_equity_curve_chart(combined, per_symbol, path=output_path, months=months)
+    print_summary_table(per_symbol, combined, months=months)
     return per_symbol, combined
 
 
