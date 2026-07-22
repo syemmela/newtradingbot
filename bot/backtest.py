@@ -30,19 +30,23 @@ import pandas as pd
 import config
 from bot import risk_manager
 from bot.portfolio import Portfolio
-from bot.strategies import mean_reversion, momentum_breakout, trend_following
+from bot.strategies import mean_reversion, momentum_breakout, trend_following, trend_pullback, volatility_filtered_trend
 from bot.types import Position, TradeRecord
 
 STRATEGY_MODULES = {
     "mean_reversion": mean_reversion,
     "momentum_breakout": momentum_breakout,
     "trend_following": trend_following,
+    "trend_pullback": trend_pullback,
+    "volatility_filtered_trend": volatility_filtered_trend,
 }
 
 STRATEGY_LABELS = {
     "mean_reversion": "Mean Reversion",
     "momentum_breakout": "Momentum Breakout",
     "trend_following": "Trend Following",
+    "trend_pullback": "Trend Pullback",
+    "volatility_filtered_trend": "Volatility-Filtered Trend",
 }
 
 

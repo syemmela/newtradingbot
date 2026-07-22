@@ -70,6 +70,43 @@ def override_symbol_param(symbol: str, **params):
                 target[name] = value
 
 
+@contextmanager
+def override_symbol_strategy(symbol: str, strategy_name: str):
+    """Temporarily reassign config.INSTRUMENTS[symbol]["strategy"] -- for
+    backtesting a CANDIDATE strategy against a symbol that's still
+    actively assigned to a different one in the live config.
+
+    This is required, not optional, for every entry point below:
+    _simulate() (called by _run_backtest_from_bars, which every sweep/
+    out-of-sample/walk-forward helper in this module goes through) looks
+    up config.INSTRUMENTS[symbol]["strategy"] ITSELF rather than trusting
+    the strategy_name argument passed into run_backtest() -- so without
+    this override, evaluate() from the symbol's currently-CONFIGURED
+    strategy runs against bars prepared for a different one entirely
+    (e.g. mean_reversion.evaluate() crashing on a KeyError for "zscore"
+    against bars that trend_pullback.compute_indicators() produced,
+    which don't have that column). All the sweep/apply helpers below
+    wrap their _run_backtest_from_bars calls with this internally, via
+    _run_backtest_for_strategy(), specifically so callers can't forget.
+    Restores the original assignment on exit even if the block raises."""
+    original = config.INSTRUMENTS[symbol]["strategy"]
+    config.INSTRUMENTS[symbol]["strategy"] = strategy_name
+    try:
+        yield
+    finally:
+        config.INSTRUMENTS[symbol]["strategy"] = original
+
+
+async def _run_backtest_for_strategy(bars: pd.DataFrame, strategy_name: str, symbol: str) -> BacktestResult:
+    """The one place every sweep/out-of-sample/walk-forward helper below
+    calls into _run_backtest_from_bars -- always under
+    override_symbol_strategy, so this module works correctly for a
+    candidate strategy regardless of what the symbol is currently
+    configured to run live."""
+    with override_symbol_strategy(symbol, strategy_name):
+        return await _run_backtest_from_bars(bars, strategy_name, symbol)
+
+
 def split_out_of_sample(bars: pd.DataFrame, in_sample_frac: float = 0.7) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Chronological split: everything before the split point is
     'in-sample' (fair game for choosing parameters); everything after is
@@ -144,7 +181,7 @@ async def sweep_module_param(
     for value in values:
         with override_module_attr(module, **{module_attr: value}):
             recomputed = module.compute_indicators(raw, symbol)
-            result = await _run_backtest_from_bars(recomputed, strategy_name, symbol)
+            result = await _run_backtest_for_strategy(recomputed, strategy_name, symbol)
         report.points.append(SweepPoint(params={module_attr: value}, result=result))
     return report
 
@@ -160,7 +197,7 @@ async def sweep_symbol_param(
         return report
     for value in values:
         with override_symbol_param(symbol, **{param_name: value}):
-            result = await _run_backtest_from_bars(bars, strategy_name, symbol)
+            result = await _run_backtest_for_strategy(bars, strategy_name, symbol)
         report.points.append(SweepPoint(params={param_name: value}, result=result))
     return report
 
@@ -179,7 +216,7 @@ async def sweep_config_attr(
         return report
     for value in values:
         with override_module_attr(config, **{config_attr: value}):
-            result = await _run_backtest_from_bars(bars, strategy_name, symbol)
+            result = await _run_backtest_for_strategy(bars, strategy_name, symbol)
         report.points.append(SweepPoint(params={config_attr: value}, result=result))
     return report
 
@@ -194,9 +231,9 @@ async def _apply_chosen_params(
         module = STRATEGY_MODULES[strategy_name]
         with override_module_attr(module, **chosen):
             recomputed = module.compute_indicators(_raw_ohlcv(bars), symbol)
-            return await _run_backtest_from_bars(recomputed, strategy_name, symbol)
+            return await _run_backtest_for_strategy(recomputed, strategy_name, symbol)
     with override_symbol_param(symbol, **chosen):
-        return await _run_backtest_from_bars(bars, strategy_name, symbol)
+        return await _run_backtest_for_strategy(bars, strategy_name, symbol)
 
 
 @dataclass

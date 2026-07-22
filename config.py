@@ -23,17 +23,23 @@ INSTRUMENTS = {
     "SPY": {
         "kind": "equity",
         "strategy": "mean_reversion",
-        "params": {"z_entry": 1.5},
+        # trend_pullback params are candidate-strategy params (see
+        # bot/strategies/trend_pullback.py) -- not yet the active
+        # strategy for SPY, kept alongside z_entry while under
+        # evaluation via bot/validation.py.
+        "params": {"z_entry": 1.5, "fast_ema_period": 50, "slow_ema_period": 200, "pullback_lookback": 5, "adx_min": 0},
     },
     "QQQ": {
         "kind": "equity",
         "strategy": "mean_reversion",
-        "params": {"z_entry": 1.8},
+        "params": {"z_entry": 1.8, "fast_ema_period": 20, "slow_ema_period": 50, "pullback_lookback": 5, "adx_min": 20},
     },
     "BTC/USD": {
         "kind": "crypto",
         "strategy": "momentum_breakout",
-        "params": {"trailing_atr_mult": 2.0, "shortable": False},
+        # adx_min is a candidate param for volatility_filtered_trend (see
+        # bot/strategies/volatility_filtered_trend.py), not yet active.
+        "params": {"trailing_atr_mult": 2.0, "shortable": False, "adx_min": 20},
     },
     "GLD": {
         "kind": "equity",
@@ -68,6 +74,10 @@ STRATEGY_TIMEFRAMES = {
     "mean_reversion": {"source": "15Min", "poll_seconds": 15 * 60, "needs_market_hours": True},
     "momentum_breakout": {"source": "1Hour", "poll_seconds": 60 * 60, "needs_market_hours": False},
     "trend_following": {"source": "1Hour", "poll_seconds": 60 * 60, "needs_market_hours": True},
+    # Candidate strategies under evaluation (bot/validation.py), not yet
+    # assigned to any symbol's "strategy" field.
+    "trend_pullback": {"source": "1Hour", "poll_seconds": 60 * 60, "needs_market_hours": True},
+    "volatility_filtered_trend": {"source": "1Hour", "poll_seconds": 60 * 60, "needs_market_hours": False},
 }
 
 # Bars fetched per tick. trend_following's 400 1H bars resample down to
@@ -76,6 +86,8 @@ LOOKBACK_BARS = {
     "mean_reversion": 60,
     "momentum_breakout": 60,
     "trend_following": 400,
+    "trend_pullback": 1000,  # 1H bars; comfortable headroom over SPY's EMA200 warmup
+    "volatility_filtered_trend": 1000,  # 1H bars, resampled to 4H (~250 bars) -- same margin as trend_following originally needed for EMA200
 }
 
 RISK_PER_TRADE_PCT = 0.01  # 1% of equity per ATR of adverse move, and the hard stop distance
