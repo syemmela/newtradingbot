@@ -71,7 +71,7 @@ STRATEGY_TIMEFRAMES = {
 }
 
 # Bars fetched per tick. trend_following's 400 1H bars resample down to
-# ~100 4H bars — comfortable headroom over EMA50's warmup.
+# ~100 4H bars — comfortable headroom over EMA30's warmup.
 LOOKBACK_BARS = {
     "mean_reversion": 60,
     "momentum_breakout": 60,

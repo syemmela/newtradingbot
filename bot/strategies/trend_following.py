@@ -1,21 +1,27 @@
-"""Trend following: 4-hour bars, EMA20/EMA50 crossover. Alpaca has no
+"""Trend following: 4-hour bars, EMA10/EMA30 crossover. Alpaca has no
 native 4-hour bar timeframe, so this strategy fetches 1-hour bars and
 resamples them locally in prepare_bars().
 
-Originally EMA50/EMA200 per the initial spec, but a 6-month backtest
-showed that pairing barely ever crosses on 4H bars (200 bars alone is
-~33 days of warmup) — GLD got 0 trades and USO got 1 over the whole
-window. Shortened to 20/50, which produced 5-6 trades with a positive
-Sharpe on both symbols in that backtest.
+Period history, each step driven by backtesting a longer window than
+the last and finding the previous choice didn't hold up:
+- Original spec (EMA50/200): barely ever crosses on 4H bars (200 bars
+  alone is ~33 days of warmup) — 0-1 trades over 6 months.
+- Shortened to 20/50: looked good at 6-12mo (positive Sharpe both
+  symbols), but extending to 12mo also exposed USO whipsawing through 8
+  straight losing crossovers in a choppy stretch (ADX ~12-21) — added a
+  per-symbol ADX floor (config.INSTRUMENTS[symbol]["params"]["trend_adx_min"])
+  to gate entries on real trend strength.
+- Testing 20/50 further out (24/60/66mo) showed it degrading badly for
+  GLD (Sharpe -0.48 to -0.62) regardless of ADX floor value — the 6-12mo
+  result was itself an overfit to a short window, not a real edge.
+  Swept both ADX floor and EMA period against all three longer windows
+  simultaneously (the bar for "robust": wins across all three, not just
+  one) and found EMA10/30 consistently best or least-bad for GLD, and
+  at least as good as 20/50 for USO too — so it's now the shared
+  default rather than a per-symbol split.
 
-Extending to 12 months exposed a problem 20/50 alone didn't catch: USO
-whipsawed through 8 straight losing crossovers (Sept-Nov 2025) at ADX as
-low as ~12-21 — a choppy stretch with no real trend, which a fast
-crossover pair trades right through. GLD didn't have this problem over
-the same window. So entries are now gated per-symbol by ADX
-(config.INSTRUMENTS[symbol]["params"]["trend_adx_min"]) rather than a
-shared threshold — GLD and USO need very different floors. Exits are
-never gated; getting out of a position doesn't depend on regime.
+Exits are never gated by ADX; getting out of a position doesn't depend
+on regime, only entries do.
 """
 
 from __future__ import annotations
@@ -26,8 +32,8 @@ import config
 from bot import indicators
 from bot.types import Position, Signal
 
-FAST_PERIOD = 20
-SLOW_PERIOD = 50
+FAST_PERIOD = 10
+SLOW_PERIOD = 30
 RESAMPLE_RULE = "4h"
 
 

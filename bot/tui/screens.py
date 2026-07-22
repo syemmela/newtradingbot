@@ -15,6 +15,7 @@ from textual.widgets import DataTable, Footer, Header, Sparkline, Static
 
 import config
 from bot import backtest, logs, risk_manager
+from bot.strategies import trend_following
 
 STRATEGY_LABELS = {
     "mean_reversion": "Mean Reversion",
@@ -203,7 +204,8 @@ class StrategiesScreen(Screen):
                     )
                 elif runner.strategy_name == "trend_following":
                     lines.append(
-                        f"  {symbol}  EMA20: {latest['ema_fast']:.2f}  EMA50: {latest['ema_slow']:.2f}  Signal: {sig_text}"
+                        f"  {symbol}  EMA{trend_following.FAST_PERIOD}: {latest['ema_fast']:.2f}  "
+                        f"EMA{trend_following.SLOW_PERIOD}: {latest['ema_slow']:.2f}  Signal: {sig_text}"
                     )
                 pos = pf.get_position(symbol)
                 if pos is not None:
