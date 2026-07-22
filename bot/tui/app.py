@@ -6,6 +6,8 @@ and the shared Portfolio object is the only thing passed between them.
 
 from __future__ import annotations
 
+import asyncio
+
 from textual.app import App
 
 from bot.engine import Engine, reconcile_positions
@@ -69,15 +71,25 @@ class TradingApp(App):
         self.portfolio = portfolio
         self.engine = engine
         self.paused = False
+        self.market_open: bool | None = None  # None until the first clock check completes
 
     def on_mount(self) -> None:
         self.push_screen("dashboard")
         self.run_worker(self._start_engine(), name="engine", exclusive=True)
         self.set_interval(5.0, self._mark_to_market_tick)
+        self.run_worker(self._refresh_market_clock(), name="market_clock_initial")
+        self.set_interval(60.0, self._refresh_market_clock)
 
     async def _start_engine(self) -> None:
         await reconcile_positions(self.broker, self.portfolio)
         await self.engine.run()
+
+    async def _refresh_market_clock(self) -> None:
+        try:
+            clock = await asyncio.to_thread(self.broker.get_clock)
+            self.market_open = bool(clock.is_open)
+        except Exception:
+            pass  # keep the last known state rather than showing a wrong one
 
     def _mark_to_market_tick(self) -> None:
         prices: dict[str, float] = {}

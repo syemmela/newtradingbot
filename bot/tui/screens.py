@@ -5,7 +5,8 @@ except via the App-level pause/kill actions (bot/tui/app.py).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from textual.containers import VerticalScroll
@@ -21,6 +22,8 @@ STRATEGY_LABELS = {
     "trend_following": "Trend Following",
 }
 
+EASTERN = ZoneInfo("America/New_York")
+
 
 def _latest_price(app, symbol: str) -> float | None:
     for runner in app.engine.runners:
@@ -32,9 +35,15 @@ def _latest_price(app, symbol: str) -> float | None:
 
 def _bot_status_line(app) -> str:
     state = "PAUSED" if app.paused else "RUNNING"
-    now = datetime.now(timezone.utc).strftime("%A, %b %d %Y %H:%M UTC")
+    now_et = datetime.now(EASTERN).strftime("%A, %b %d %Y %I:%M:%S %p ET")
     mode = "Paper Trading" if config.PAPER_TRADING else "LIVE TRADING"
-    return f"[b]ALPACA QUANT BOT[/b]   ● {state}   {mode}\n{now}"
+    if app.market_open is None:
+        market_line = "MARKET STATUS UNKNOWN"
+    elif app.market_open:
+        market_line = "MARKET OPENED 🟢"
+    else:
+        market_line = "MARKET CLOSED 🔴"
+    return f"[b]ALPACA QUANT BOT[/b]   ● {state}   {mode}   {market_line}\n{now_et}"
 
 
 class DashboardScreen(Screen):
@@ -311,7 +320,7 @@ class ReportsScreen(Screen):
         app = self.app
         pf = app.portfolio
         label = "EVENING WRAP-UP" if self.evening else "MORNING BRIEFING"
-        now = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        now = datetime.now(EASTERN).strftime("%I:%M %p ET")
         lines = [f"{label}                                  {now}", "", "OPEN POSITIONS"]
         for symbol, pos in pf.positions.items():
             price = _latest_price(app, symbol) or pos.entry_price
