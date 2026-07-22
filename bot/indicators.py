@@ -82,6 +82,54 @@ def volatility_ratio(atr_series: pd.Series, lookback: int = 50) -> pd.Series:
     return atr_series / atr_series.rolling(lookback).mean()
 
 
+def vwap(df: pd.DataFrame) -> pd.Series:
+    """Volume-weighted average price, reset at the start of each calendar
+    day (a session boundary) -- not a plain rolling average. Uses typical
+    price (H+L+C)/3, the standard VWAP convention."""
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3
+    pv = typical_price * df["volume"]
+    day = df.index.normalize()
+    cum_pv = pv.groupby(day).cumsum()
+    cum_vol = df["volume"].groupby(day).cumsum()
+    return cum_pv / cum_vol
+
+
+def opening_range(df: pd.DataFrame, bars_per_session: int) -> pd.DataFrame:
+    """High/low of the first `bars_per_session` bars of each calendar day,
+    broadcast across every bar in that same day -- e.g. bars_per_session=2
+    on 15-min bars gives the first 30 minutes of each session. Bars after
+    the opening window still see that day's range; the opening window's
+    own bars see a range still being formed (their own high/low so far)."""
+    day = df.index.normalize()
+    grouped_high = df.groupby(day)["high"]
+    grouped_low = df.groupby(day)["low"]
+    or_high = grouped_high.transform(lambda s: s.iloc[:bars_per_session].max())
+    or_low = grouped_low.transform(lambda s: s.iloc[:bars_per_session].min())
+    return pd.DataFrame({"or_high": or_high, "or_low": or_low}, index=df.index)
+
+
+def bollinger_bands(close: pd.Series, period: int = 20, num_std: float = 2.0) -> pd.DataFrame:
+    mid = close.rolling(period).mean()
+    std = close.rolling(period).std()
+    upper = mid + num_std * std
+    lower = mid - num_std * std
+    bandwidth = (upper - lower) / mid
+    return pd.DataFrame({"mid": mid, "upper": upper, "lower": lower, "bandwidth": bandwidth}, index=close.index)
+
+
+def bandwidth_ratio(bandwidth: pd.Series, lookback: int = 50) -> pd.Series:
+    """Current Bollinger bandwidth relative to its own trailing rolling
+    average -- <1 means a squeeze (compressed relative to recent norm),
+    the setup a Bollinger-squeeze breakout strategy waits for."""
+    return bandwidth / bandwidth.rolling(lookback).mean()
+
+
+def momentum(close: pd.Series, period: int) -> pd.Series:
+    """Simple N-period rate of change: how much price has moved over the
+    last `period` bars, as a fraction of the price `period` bars ago."""
+    return close / close.shift(period) - 1
+
+
 def resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     """Resample 1-bar-granularity OHLCV into a coarser timeframe (e.g. '4h').
 

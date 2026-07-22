@@ -27,19 +27,33 @@ INSTRUMENTS = {
         # bot/strategies/trend_pullback.py) -- not yet the active
         # strategy for SPY, kept alongside z_entry while under
         # evaluation via bot/validation.py.
-        "params": {"z_entry": 1.5, "fast_ema_period": 50, "slow_ema_period": 200, "pullback_lookback": 5, "adx_min": 0},
+        "params": {
+            "z_entry": 1.5, "fast_ema_period": 50, "slow_ema_period": 200, "pullback_lookback": 5, "adx_min": 0,
+            # orb_vwap + vwap_reversion candidate params (not yet active).
+            "or_bars": 2, "confirmation_type": "volatility", "vol_ratio_min": 1.2,
+            "vwap_deviation_entry": 1.5, "vwap_adx_max": 20,
+        },
     },
     "QQQ": {
         "kind": "equity",
         "strategy": "mean_reversion",
-        "params": {"z_entry": 1.8, "fast_ema_period": 20, "slow_ema_period": 50, "pullback_lookback": 5, "adx_min": 20},
+        "params": {
+            "z_entry": 1.8, "fast_ema_period": 20, "slow_ema_period": 50, "pullback_lookback": 5, "adx_min": 20,
+            # orb_vwap candidate params (not yet active).
+            "or_bars": 2, "confirmation_type": "volume", "volume_mult": 1.5,
+        },
     },
     "BTC/USD": {
         "kind": "crypto",
         "strategy": "momentum_breakout",
         # adx_min is a candidate param for volatility_filtered_trend (see
         # bot/strategies/volatility_filtered_trend.py), not yet active.
-        "params": {"trailing_atr_mult": 2.0, "shortable": False, "adx_min": 20},
+        "params": {
+            "trailing_atr_mult": 2.0, "shortable": False, "adx_min": 20,
+            # bollinger_squeeze_breakout + timeseries_momentum candidate params (not yet active).
+            "bb_period": 20, "bb_std": 2.0, "squeeze_max_ratio": 0.7,
+            "momentum_period": 100, "momentum_entry_threshold": 0.05, "momentum_exit_threshold": 0.0,
+        },
     },
     "GLD": {
         "kind": "equity",
@@ -78,6 +92,10 @@ STRATEGY_TIMEFRAMES = {
     # assigned to any symbol's "strategy" field.
     "trend_pullback": {"source": "1Hour", "poll_seconds": 60 * 60, "needs_market_hours": True},
     "volatility_filtered_trend": {"source": "1Hour", "poll_seconds": 60 * 60, "needs_market_hours": False},
+    "orb_vwap": {"source": "15Min", "poll_seconds": 15 * 60, "needs_market_hours": True},
+    "vwap_reversion": {"source": "15Min", "poll_seconds": 15 * 60, "needs_market_hours": True},
+    "bollinger_squeeze_breakout": {"source": "1Hour", "poll_seconds": 60 * 60, "needs_market_hours": False},
+    "timeseries_momentum": {"source": "1Hour", "poll_seconds": 60 * 60, "needs_market_hours": False},
 }
 
 # Bars fetched per tick. trend_following's 400 1H bars resample down to
@@ -88,6 +106,10 @@ LOOKBACK_BARS = {
     "trend_following": 400,
     "trend_pullback": 1000,  # 1H bars; comfortable headroom over SPY's EMA200 warmup
     "volatility_filtered_trend": 1000,  # 1H bars, resampled to 4H (~250 bars) -- same margin as trend_following originally needed for EMA200
+    "orb_vwap": 200,  # 15Min bars (~7.7 trading days) -- headroom over VOLATILITY_LOOKBACK+ATR_PERIOD
+    "vwap_reversion": 100,  # 15Min bars -- headroom over ATR_PERIOD; VWAP itself resets daily, no long history needed
+    "bollinger_squeeze_breakout": 150,  # 1H bars -- headroom over bb_period+VOLATILITY_LOOKBACK
+    "timeseries_momentum": 200,  # 1H bars -- headroom over momentum_period=100
 }
 
 RISK_PER_TRADE_PCT = 0.01  # 1% of equity per ATR of adverse move, and the hard stop distance

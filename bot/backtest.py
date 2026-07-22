@@ -30,7 +30,17 @@ import pandas as pd
 import config
 from bot import risk_manager
 from bot.portfolio import Portfolio
-from bot.strategies import mean_reversion, momentum_breakout, trend_following, trend_pullback, volatility_filtered_trend
+from bot.strategies import (
+    bollinger_squeeze_breakout,
+    mean_reversion,
+    momentum_breakout,
+    orb_vwap,
+    timeseries_momentum,
+    trend_following,
+    trend_pullback,
+    volatility_filtered_trend,
+    vwap_reversion,
+)
 from bot.types import Position, TradeRecord
 
 STRATEGY_MODULES = {
@@ -39,6 +49,10 @@ STRATEGY_MODULES = {
     "trend_following": trend_following,
     "trend_pullback": trend_pullback,
     "volatility_filtered_trend": volatility_filtered_trend,
+    "orb_vwap": orb_vwap,
+    "vwap_reversion": vwap_reversion,
+    "bollinger_squeeze_breakout": bollinger_squeeze_breakout,
+    "timeseries_momentum": timeseries_momentum,
 }
 
 STRATEGY_LABELS = {
@@ -47,6 +61,10 @@ STRATEGY_LABELS = {
     "trend_following": "Trend Following",
     "trend_pullback": "Trend Pullback",
     "volatility_filtered_trend": "Volatility-Filtered Trend",
+    "orb_vwap": "ORB + VWAP",
+    "vwap_reversion": "VWAP Reversion",
+    "bollinger_squeeze_breakout": "Bollinger Squeeze Breakout",
+    "timeseries_momentum": "Time-Series Momentum",
 }
 
 
