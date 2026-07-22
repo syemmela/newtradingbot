@@ -186,21 +186,28 @@ class StrategiesScreen(Screen):
                 if runner.strategy_name == "mean_reversion":
                     z = latest.get("zscore")
                     adx = latest.get("adx")
+                    atr_ratio = latest.get("atr_ratio")
                     threshold = config.INSTRUMENTS[symbol]["params"]["z_entry"]
-                    regime = "RANGING" if pd.notna(adx) and adx < config.MEAN_REVERSION_ADX_MAX else "TRENDING (blocked)"
+                    trending = pd.notna(adx) and adx >= config.MEAN_REVERSION_ADX_MAX
+                    choppy = pd.notna(atr_ratio) and atr_ratio > config.MEAN_REVERSION_MAX_VOL_RATIO
+                    regime = "TRENDING (blocked)" if trending else ("CHOPPY (blocked)" if choppy else "RANGING")
                     lines.append(
                         f"  {symbol}  Z-Score: {z:+.2f}   Threshold: +/-{threshold}   "
-                        f"ADX: {adx:.1f} ({regime})   Signal: {sig_text}"
+                        f"ADX: {adx:.1f}  ATR Ratio: {atr_ratio:.2f} ({regime})   Signal: {sig_text}"
                     )
                 elif runner.strategy_name == "momentum_breakout":
                     hi = latest.get("donchian_hi")
                     vol_avg = latest.get("vol_avg")
                     vol_ratio = latest["volume"] / vol_avg if vol_avg else 0
                     adx = latest.get("adx")
-                    regime = "TRENDING" if pd.notna(adx) and adx >= config.MOMENTUM_BREAKOUT_ADX_MIN else "RANGING (blocked)"
+                    atr_ratio = latest.get("atr_ratio")
+                    not_trending = pd.isna(adx) or adx < config.MOMENTUM_BREAKOUT_ADX_MIN
+                    not_expanding = pd.isna(atr_ratio) or atr_ratio < config.MOMENTUM_BREAKOUT_MIN_VOL_RATIO
+                    regime = "TRENDING+EXPANDING" if not (not_trending or not_expanding) else "BLOCKED"
                     lines.append(
                         f"  {symbol}  20H High: {hi:.2f}  Price: {latest['close']:.2f}  "
-                        f"Volume: {vol_ratio:.2f}x  ATR: {latest['atr']:.2f}  ADX: {adx:.1f} ({regime})  Signal: {sig_text}"
+                        f"Volume: {vol_ratio:.2f}x  ATR: {latest['atr']:.2f}  ADX: {adx:.1f}  "
+                        f"ATR Ratio: {atr_ratio:.2f} ({regime})  Signal: {sig_text}"
                     )
                 elif runner.strategy_name == "trend_following":
                     lines.append(

@@ -92,6 +92,17 @@ ADX_PERIOD = 14
 MEAN_REVERSION_ADX_MAX = 20
 MOMENTUM_BREAKOUT_ADX_MIN = 25
 
+# Volatility regime filter: ADX measures directional trend STRENGTH, not
+# the MAGNITUDE of price movement -- a market can be ranging (low ADX) yet
+# unusually choppy (elevated ATR relative to its own recent norm), which is
+# a different danger for mean reversion than a real trend is. Momentum
+# breakout gets the opposite requirement: a genuine breakout should come
+# with volatility expansion, not just a volume spike and rising ADX.
+# Exits are never gated by this — only new entries.
+VOLATILITY_LOOKBACK = 50
+MEAN_REVERSION_MAX_VOL_RATIO = 1.5
+MOMENTUM_BREAKOUT_MIN_VOL_RATIO = 1.2
+
 # Backtest fill assumptions: Alpaca is commission-free, but every fill still
 # has real costs beyond the broker's own fee.
 # - Slippage: price impact/movement between the decision and the fill.

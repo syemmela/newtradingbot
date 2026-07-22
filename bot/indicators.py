@@ -72,6 +72,16 @@ def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return dx.ewm(alpha=1 / period, adjust=False).mean()
 
 
+def volatility_ratio(atr_series: pd.Series, lookback: int = 50) -> pd.Series:
+    """Current ATR relative to its own trailing rolling average. >1 means
+    volatility is expanding relative to this instrument's recent norm, <1
+    means it's contracting. Distinct from ADX, which measures directional
+    trend STRENGTH, not the magnitude of price movement -- a market can be
+    ranging (low ADX) yet unusually choppy (high vol_ratio), which is a
+    different kind of danger for mean reversion than a real trend is."""
+    return atr_series / atr_series.rolling(lookback).mean()
+
+
 def resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     """Resample 1-bar-granularity OHLCV into a coarser timeframe (e.g. '4h').
 

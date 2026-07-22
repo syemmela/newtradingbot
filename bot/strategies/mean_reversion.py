@@ -1,11 +1,15 @@
 """Mean reversion: 15-min bars, 20-period z-score. Entry beyond +/-z_entry
 standard deviations, exit when price reverts back through the mean.
 
-Gated by an ADX regime filter: new entries only fire when ADX is below
-config.MEAN_REVERSION_ADX_MAX (market isn't trending) — a 6-month
-backtest showed this strategy losing consistently across the whole
-z_entry range because it kept fading real trends, not just noise. Exits
-are never gated; getting out of a position doesn't depend on regime.
+Gated by two regime filters, both entry-only (exits are never gated):
+- ADX below config.MEAN_REVERSION_ADX_MAX (market isn't trending) — a
+  6-month backtest showed this strategy losing consistently across the
+  whole z_entry range because it kept fading real trends, not just noise.
+- Volatility ratio below config.MEAN_REVERSION_MAX_VOL_RATIO (current ATR
+  isn't unusually elevated vs its own recent norm) — ADX alone only rules
+  out real TRENDS; a market can still be technically ranging (low ADX)
+  while unusually choppy, which is a different kind of danger for a
+  strategy that fades moves expecting reversion.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ def compute_indicators(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     df["zscore"] = indicators.zscore(df["close"], PERIOD)
     df["atr"] = indicators.atr(df, config.ATR_PERIOD)
     df["adx"] = indicators.adx(df, config.ADX_PERIOD)
+    df["atr_ratio"] = indicators.volatility_ratio(df["atr"], config.VOLATILITY_LOOKBACK)
     return df
 
 
@@ -46,10 +51,13 @@ def evaluate(df: pd.DataFrame, symbol: str, position: Position | None) -> Signal
         adx = latest.get("adx")
         if pd.isna(adx) or adx >= config.MEAN_REVERSION_ADX_MAX:
             return None  # market's trending too hard to safely fade
+        atr_ratio = latest.get("atr_ratio")
+        if pd.isna(atr_ratio) or atr_ratio > config.MEAN_REVERSION_MAX_VOL_RATIO:
+            return None  # ranging, but unusually choppy right now -- not safe to fade either
         if z <= -z_entry:
-            return Signal(symbol, "mean_reversion", "long", price, ts, f"z={z:.2f} <= -{z_entry}, adx={adx:.1f}")
+            return Signal(symbol, "mean_reversion", "long", price, ts, f"z={z:.2f} <= -{z_entry}, adx={adx:.1f}, atr_ratio={atr_ratio:.2f}")
         if z >= z_entry:
-            return Signal(symbol, "mean_reversion", "short", price, ts, f"z={z:.2f} >= {z_entry}, adx={adx:.1f}")
+            return Signal(symbol, "mean_reversion", "short", price, ts, f"z={z:.2f} >= {z_entry}, adx={adx:.1f}, atr_ratio={atr_ratio:.2f}")
         return None
 
     if position.side == "long" and z >= 0:

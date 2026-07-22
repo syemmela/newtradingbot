@@ -165,6 +165,25 @@ async def sweep_symbol_param(
     return report
 
 
+async def sweep_config_attr(
+    bars: pd.DataFrame, strategy_name: str, symbol: str, config_attr: str, values: list
+) -> RobustnessReport:
+    """Sweep a GLOBAL config constant shared across every symbol using a
+    strategy (e.g. MEAN_REVERSION_ADX_MAX, MOMENTUM_BREAKOUT_MIN_VOL_RATIO)
+    -- distinct from sweep_symbol_param, which only covers per-symbol
+    config.INSTRUMENTS[symbol]["params"] entries like z_entry or
+    trend_adx_min. No indicator recomputation needed; these thresholds are
+    only read at evaluate()-time."""
+    report = RobustnessReport(param_name=config_attr)
+    if bars.empty:
+        return report
+    for value in values:
+        with override_module_attr(config, **{config_attr: value}):
+            result = await _run_backtest_from_bars(bars, strategy_name, symbol)
+        report.points.append(SweepPoint(params={config_attr: value}, result=result))
+    return report
+
+
 async def _apply_chosen_params(
     bars: pd.DataFrame, strategy_name: str, symbol: str, chosen: dict, is_module_attr: bool
 ) -> BacktestResult:
