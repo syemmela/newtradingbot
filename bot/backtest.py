@@ -46,6 +46,9 @@ STRATEGY_LABELS = {
 }
 
 
+MIN_TRADES_FOR_VALIDATION = 30  # below this, a result isn't statistically trustworthy either way
+
+
 @dataclass
 class BacktestResult:
     symbol: str
@@ -55,11 +58,20 @@ class BacktestResult:
     avg_win: float
     avg_loss: float
     profit_factor: float
+    avg_trade: float
+    expectancy: float
     sharpe: float
+    sortino: float
+    calmar: float
     max_dd: float
+    max_consecutive_losses: int
     total_return_pct: float
+    meets_min_trades: bool
+    long_stats: dict = field(default_factory=dict)
+    short_stats: dict = field(default_factory=dict)
     equity_curve: list[float] = field(default_factory=list)
     timestamps: list = field(default_factory=list)
+    trade_log: list = field(default_factory=list)  # raw TradeRecords, for pooling across walk-forward folds
 
 
 @dataclass
@@ -69,16 +81,43 @@ class CombinedBacktestResult:
     avg_win: float
     avg_loss: float
     profit_factor: float
+    avg_trade: float
+    expectancy: float
     sharpe: float
+    sortino: float
+    calmar: float
     max_dd: float
+    max_consecutive_losses: int
     total_return_pct: float
+    meets_min_trades: bool
+    long_stats: dict = field(default_factory=dict)
+    short_stats: dict = field(default_factory=dict)
     equity_curve: list[float] = field(default_factory=list)
     timestamps: list = field(default_factory=list)
     per_symbol_trade_counts: dict = field(default_factory=dict)
 
 
 def _empty_result(symbol: str, strategy_name: str, initial_equity: float) -> BacktestResult:
-    return BacktestResult(symbol, strategy_name, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, [initial_equity], [])
+    return BacktestResult(
+        symbol=symbol,
+        strategy=strategy_name,
+        trades=0,
+        win_rate=0.0,
+        avg_win=0.0,
+        avg_loss=0.0,
+        profit_factor=0.0,
+        avg_trade=0.0,
+        expectancy=0.0,
+        sharpe=0.0,
+        sortino=0.0,
+        calmar=0.0,
+        max_dd=0.0,
+        max_consecutive_losses=0,
+        total_return_pct=0.0,
+        meets_min_trades=False,
+        equity_curve=[initial_equity],
+        timestamps=[],
+    )
 
 
 def _fill_price(price: float, action: str) -> float:
@@ -207,7 +246,46 @@ async def _simulate(symbol_bars: dict[str, pd.DataFrame], initial_equity: float)
     return sim, trades, timestamps
 
 
-def _compute_stats(trades: list[TradeRecord], equity_curve: list[float], initial_equity: float) -> dict:
+def _max_consecutive_losses(trades: list[TradeRecord]) -> int:
+    worst = current = 0
+    for t in trades:
+        if t.pnl < 0:
+            current += 1
+            worst = max(worst, current)
+        else:
+            current = 0
+    return worst
+
+
+def _side_stats(trades: list[TradeRecord]) -> dict:
+    """Win rate / avg win / avg loss / profit factor / avg trade for ONE
+    side only (long or short trades). No equity-curve metrics (Sharpe,
+    max DD) here -- those need a continuous account curve, which a subset
+    of trades pulled out of a shared-capital simulation doesn't have on
+    its own. This is what answers "is one direction hurting us" (#10)."""
+    n = len(trades)
+    wins = [t.pnl for t in trades if t.pnl > 0]
+    losses = [t.pnl for t in trades if t.pnl < 0]
+    win_rate = (len(wins) / n * 100) if n else 0.0
+    avg_win = (sum(wins) / len(wins)) if wins else 0.0
+    avg_loss = (sum(losses) / len(losses)) if losses else 0.0
+    gross_profit = sum(wins)
+    gross_loss = -sum(losses)
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float("inf") if gross_profit > 0 else 0.0)
+    avg_trade = (sum(t.pnl for t in trades) / n) if n else 0.0
+    return {
+        "trades": n,
+        "win_rate": win_rate,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "profit_factor": profit_factor,
+        "avg_trade": avg_trade,
+    }
+
+
+def _compute_stats(
+    trades: list[TradeRecord], equity_curve: list[float], initial_equity: float, timestamps: list | None = None
+) -> dict:
     trades_n = len(trades)
     wins = [t.pnl for t in trades if t.pnl > 0]
     losses = [t.pnl for t in trades if t.pnl < 0]
@@ -220,6 +298,13 @@ def _compute_stats(trades: list[TradeRecord], equity_curve: list[float], initial
         profit_factor = gross_profit / gross_loss
     else:
         profit_factor = float("inf") if gross_profit > 0 else 0.0
+    avg_trade = (sum(t.pnl for t in trades) / trades_n) if trades_n else 0.0
+    # Expectancy = (win% * avg win) + (loss% * avg loss); avg_loss is
+    # already negative, so this nets out to the expected P&L per trade.
+    # It's mathematically identical to avg_trade -- kept as a separate
+    # field since it's commonly reported via this decomposition, per #5.
+    loss_rate = 1 - (win_rate / 100) if trades_n else 0.0
+    expectancy = (win_rate / 100 * avg_win) + (loss_rate * avg_loss)
 
     curve = np.array(equity_curve, dtype=float)
     returns = np.diff(curve) / curve[:-1] if len(curve) > 1 else np.array([])
@@ -227,10 +312,26 @@ def _compute_stats(trades: list[TradeRecord], equity_curve: list[float], initial
     # frequency — a standard simplification for a quick retail backtest,
     # not a duration-weighted Sharpe.
     sharpe = float(returns.mean() / returns.std() * math.sqrt(252)) if len(returns) > 1 and returns.std() > 0 else 0.0
+
+    downside = returns[returns < 0] if len(returns) else returns
+    if len(downside) > 0 and downside.std() > 0:
+        sortino = float(returns.mean() / downside.std() * math.sqrt(252))
+    elif len(returns) > 1 and returns.mean() > 0:
+        sortino = float("inf")  # no downside moves at all and net positive -- undefined ratio, not literally infinite return
+    else:
+        sortino = 0.0
+
     running_peak = np.maximum.accumulate(curve) if len(curve) else curve
     drawdowns = (curve - running_peak) / running_peak if len(curve) else curve
     max_dd = float(drawdowns.min() * 100) if len(drawdowns) else 0.0
     total_return_pct = (curve[-1] - initial_equity) / initial_equity * 100 if len(curve) else 0.0
+
+    calmar = 0.0
+    if timestamps and len(timestamps) >= 2 and max_dd < 0 and len(curve):
+        days_spanned = max((timestamps[-1] - timestamps[0]).total_seconds() / 86400, 1.0)
+        total_return_frac = (curve[-1] - initial_equity) / initial_equity
+        annualized_return = (1 + total_return_frac) ** (365 / days_spanned) - 1
+        calmar = float(annualized_return / (abs(max_dd) / 100))
 
     return {
         "trades": trades_n,
@@ -238,9 +339,17 @@ def _compute_stats(trades: list[TradeRecord], equity_curve: list[float], initial
         "avg_win": avg_win,
         "avg_loss": avg_loss,
         "profit_factor": profit_factor,
+        "avg_trade": avg_trade,
+        "expectancy": expectancy,
         "sharpe": sharpe,
+        "sortino": sortino,
+        "calmar": calmar,
         "max_dd": max_dd,
+        "max_consecutive_losses": _max_consecutive_losses(trades),
         "total_return_pct": total_return_pct,
+        "meets_min_trades": trades_n >= MIN_TRADES_FOR_VALIDATION,
+        "long_stats": _side_stats([t for t in trades if t.direction == "long"]),
+        "short_stats": _side_stats([t for t in trades if t.direction == "short"]),
     }
 
 
@@ -261,15 +370,17 @@ async def _run_backtest_from_bars(
     if bars.empty:
         return _empty_result(symbol, strategy_name, initial_equity)
     sim, trades, timestamps = await _simulate({symbol: bars}, initial_equity)
-    stats = _compute_stats(trades, sim.equity_curve, initial_equity)
-    return BacktestResult(symbol=symbol, strategy=strategy_name, equity_curve=sim.equity_curve, timestamps=timestamps, **stats)
+    stats = _compute_stats(trades, sim.equity_curve, initial_equity, timestamps)
+    return BacktestResult(
+        symbol=symbol, strategy=strategy_name, equity_curve=sim.equity_curve, timestamps=timestamps, trade_log=trades, **stats
+    )
 
 
 async def _run_combined_from_bars(
     symbol_bars: dict[str, pd.DataFrame], initial_equity: float = 100_000.0
 ) -> CombinedBacktestResult:
     sim, trades, timestamps = await _simulate(symbol_bars, initial_equity)
-    stats = _compute_stats(trades, sim.equity_curve, initial_equity)
+    stats = _compute_stats(trades, sim.equity_curve, initial_equity, timestamps)
     per_symbol_trade_counts: dict[str, int] = {}
     for t in trades:
         per_symbol_trade_counts[t.symbol] = per_symbol_trade_counts.get(t.symbol, 0) + 1
@@ -340,23 +451,38 @@ def print_summary_table(
 ) -> None:
     columns = (
         f"{'Symbol':10s} {'Strategy':18s} {'Trades':>7s} {'Win %':>7s} "
-        f"{'Avg Win':>10s} {'Avg Loss':>10s} {'PF':>6s} {'Sharpe':>7s} {'Max DD':>8s} {'Return':>8s}"
+        f"{'Avg Win':>10s} {'Avg Loss':>10s} {'PF':>6s} {'Sharpe':>7s} {'Sortino':>7s} {'Calmar':>7s} {'Max DD':>8s} {'Return':>8s}"
     )
     print(columns)
     print("-" * len(columns))
     for symbol, r in per_symbol.items():
         pf_display = "inf" if r.profit_factor == float("inf") else f"{r.profit_factor:.2f}"
+        sortino_display = "inf" if r.sortino == float("inf") else f"{r.sortino:.2f}"
         print(
             f"{symbol:10s} {STRATEGY_LABELS[r.strategy]:18s} {r.trades:7d} {r.win_rate:6.1f}% "
-            f"{r.avg_win:10.2f} {r.avg_loss:10.2f} {pf_display:>6s} {r.sharpe:7.2f} {r.max_dd:7.1f}% {r.total_return_pct:+7.1f}%"
+            f"{r.avg_win:10.2f} {r.avg_loss:10.2f} {pf_display:>6s} {r.sharpe:7.2f} {sortino_display:>7s} "
+            f"{r.calmar:7.2f} {r.max_dd:7.1f}% {r.total_return_pct:+7.1f}%"
         )
     print("-" * len(columns))
     pf_display = "inf" if combined.profit_factor == float("inf") else f"{combined.profit_factor:.2f}"
+    sortino_display = "inf" if combined.sortino == float("inf") else f"{combined.sortino:.2f}"
     print(
         f"{'COMBINED':10s} {'(correlation ON)':18s} {combined.trades:7d} {combined.win_rate:6.1f}% "
         f"{combined.avg_win:10.2f} {combined.avg_loss:10.2f} {pf_display:>6s} "
-        f"{combined.sharpe:7.2f} {combined.max_dd:7.1f}% {combined.total_return_pct:+7.1f}%"
+        f"{combined.sharpe:7.2f} {sortino_display:>7s} {combined.calmar:7.2f} {combined.max_dd:7.1f}% {combined.total_return_pct:+7.1f}%"
     )
+    print()
+
+    print(f"{'Symbol':10s} {'Avg Trade':>10s} {'Expectancy':>11s} {'Max Consec Loss':>16s} {'Long (n/win%/PF)':>20s} {'Short (n/win%/PF)':>20s}")
+    for symbol, r in per_symbol.items():
+        long_pf = "inf" if r.long_stats.get("profit_factor") == float("inf") else f"{r.long_stats.get('profit_factor', 0):.2f}"
+        short_pf = "inf" if r.short_stats.get("profit_factor") == float("inf") else f"{r.short_stats.get('profit_factor', 0):.2f}"
+        long_display = f"{r.long_stats.get('trades', 0)}/{r.long_stats.get('win_rate', 0):.0f}%/{long_pf}"
+        short_display = f"{r.short_stats.get('trades', 0)}/{r.short_stats.get('win_rate', 0):.0f}%/{short_pf}"
+        print(
+            f"{symbol:10s} {r.avg_trade:10.2f} {r.expectancy:11.2f} {r.max_consecutive_losses:16d} "
+            f"{long_display:>20s} {short_display:>20s}"
+        )
     print()
 
     flagged = [(symbol, r.strategy, r.sharpe) for symbol, r in per_symbol.items() if r.sharpe < 0]
@@ -369,6 +495,14 @@ def print_summary_table(
             print(f"  - {symbol} ({label}): Sharpe {sharpe:.2f}")
     else:
         print(f"No strategies flagged — all Sharpe ratios positive over the {months}-month window.")
+
+    insufficient = [(symbol, r.trades) for symbol, r in per_symbol.items() if not r.meets_min_trades]
+    if not combined.meets_min_trades:
+        insufficient.append(("COMBINED", combined.trades))
+    if insufficient:
+        print(f"\nINSUFFICIENT TRADES (below {MIN_TRADES_FOR_VALIDATION} — cannot be validated either way):")
+        for symbol, n in insufficient:
+            print(f"  - {symbol}: only {n} trades")
 
 
 async def run_full_report(
