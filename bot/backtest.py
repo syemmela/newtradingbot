@@ -244,47 +244,64 @@ def _compute_stats(trades: list[TradeRecord], equity_curve: list[float], initial
     }
 
 
-async def run_backtest(
-    broker, strategy_name: str, symbol: str, months: int = config.BACKTEST_MONTHS, initial_equity: float = 100_000.0
+async def _fetch_all_symbol_bars(broker, months: int) -> dict[str, pd.DataFrame]:
+    """Fetch + prepare bars for all 5 instruments once. run_full_report()
+    reuses this single fetch for both the isolated and combined runs below
+    instead of hitting the API twice per symbol."""
+    symbol_bars: dict[str, pd.DataFrame] = {}
+    for strategy_name, symbols in config.STRATEGY_SYMBOLS.items():
+        for symbol in symbols:
+            symbol_bars[symbol] = await _fetch_prepared_bars(broker, strategy_name, symbol, months)
+    return symbol_bars
+
+
+async def _run_backtest_from_bars(
+    bars: pd.DataFrame, strategy_name: str, symbol: str, initial_equity: float = 100_000.0
 ) -> BacktestResult:
-    bars = await _fetch_prepared_bars(broker, strategy_name, symbol, months)
     if bars.empty:
         return _empty_result(symbol, strategy_name, initial_equity)
-
     sim, trades, timestamps = await _simulate({symbol: bars}, initial_equity)
     stats = _compute_stats(trades, sim.equity_curve, initial_equity)
     return BacktestResult(symbol=symbol, strategy=strategy_name, equity_curve=sim.equity_curve, timestamps=timestamps, **stats)
 
 
-async def run_all_backtests(broker, months: int = config.BACKTEST_MONTHS) -> dict[str, BacktestResult]:
-    results: dict[str, BacktestResult] = {}
-    for strategy_name, symbols in config.STRATEGY_SYMBOLS.items():
-        for symbol in symbols:
-            results[symbol] = await run_backtest(broker, strategy_name, symbol, months=months)
-    return results
-
-
-async def run_combined_backtest(
-    broker, months: int = config.BACKTEST_MONTHS, initial_equity: float = 100_000.0
+async def _run_combined_from_bars(
+    symbol_bars: dict[str, pd.DataFrame], initial_equity: float = 100_000.0
 ) -> CombinedBacktestResult:
-    symbol_bars: dict[str, pd.DataFrame] = {}
-    for strategy_name, symbols in config.STRATEGY_SYMBOLS.items():
-        for symbol in symbols:
-            symbol_bars[symbol] = await _fetch_prepared_bars(broker, strategy_name, symbol, months)
-
     sim, trades, timestamps = await _simulate(symbol_bars, initial_equity)
     stats = _compute_stats(trades, sim.equity_curve, initial_equity)
-
     per_symbol_trade_counts: dict[str, int] = {}
     for t in trades:
         per_symbol_trade_counts[t.symbol] = per_symbol_trade_counts.get(t.symbol, 0) + 1
-
     return CombinedBacktestResult(
         equity_curve=sim.equity_curve,
         timestamps=timestamps,
         per_symbol_trade_counts=per_symbol_trade_counts,
         **stats,
     )
+
+
+async def run_backtest(
+    broker, strategy_name: str, symbol: str, months: int = config.BACKTEST_MONTHS, initial_equity: float = 100_000.0
+) -> BacktestResult:
+    bars = await _fetch_prepared_bars(broker, strategy_name, symbol, months)
+    return await _run_backtest_from_bars(bars, strategy_name, symbol, initial_equity)
+
+
+async def run_all_backtests(broker, months: int = config.BACKTEST_MONTHS) -> dict[str, BacktestResult]:
+    symbol_bars = await _fetch_all_symbol_bars(broker, months)
+    results: dict[str, BacktestResult] = {}
+    for strategy_name, symbols in config.STRATEGY_SYMBOLS.items():
+        for symbol in symbols:
+            results[symbol] = await _run_backtest_from_bars(symbol_bars[symbol], strategy_name, symbol)
+    return results
+
+
+async def run_combined_backtest(
+    broker, months: int = config.BACKTEST_MONTHS, initial_equity: float = 100_000.0
+) -> CombinedBacktestResult:
+    symbol_bars = await _fetch_all_symbol_bars(broker, months)
+    return await _run_combined_from_bars(symbol_bars, initial_equity)
 
 
 def render_equity_curve_chart(
@@ -357,8 +374,14 @@ def print_summary_table(
 async def run_full_report(
     broker, months: int = config.BACKTEST_MONTHS, output_path: str = "backtest_results.png"
 ) -> tuple[dict[str, BacktestResult], CombinedBacktestResult]:
-    per_symbol = await run_all_backtests(broker, months=months)
-    combined = await run_combined_backtest(broker, months=months)
+    symbol_bars = await _fetch_all_symbol_bars(broker, months)  # fetched once, reused below
+
+    per_symbol: dict[str, BacktestResult] = {}
+    for strategy_name, symbols in config.STRATEGY_SYMBOLS.items():
+        for symbol in symbols:
+            per_symbol[symbol] = await _run_backtest_from_bars(symbol_bars[symbol], strategy_name, symbol)
+    combined = await _run_combined_from_bars(symbol_bars)
+
     render_equity_curve_chart(combined, per_symbol, path=output_path, months=months)
     print_summary_table(per_symbol, combined, months=months)
     return per_symbol, combined
