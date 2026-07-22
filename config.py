@@ -79,6 +79,7 @@ LOOKBACK_BARS = {
 }
 
 RISK_PER_TRADE_PCT = 0.01  # 1% of equity per ATR of adverse move, and the hard stop distance
+MAX_TOTAL_OPEN_RISK_PCT = 0.03  # cap on SUM of all open positions' risk-to-stop, across every strategy at once
 ATR_PERIOD = 14
 
 MAX_DRAWDOWN_PCT = 0.10  # circuit breaker: halt new entries past this drawdown from peak equity
@@ -92,8 +93,15 @@ MEAN_REVERSION_ADX_MAX = 20
 MOMENTUM_BREAKOUT_ADX_MIN = 25
 
 # Backtest fill assumptions: Alpaca is commission-free, but every fill still
-# crosses the spread/moves the book a bit — modeled as a flat 0.05% adverse
-# slippage applied to both entries and exits.
+# has real costs beyond the broker's own fee.
+# - Slippage: price impact/movement between the decision and the fill.
+# - Spread: the bid-ask spread crossed on every market order (half paid on
+#   entry, half on exit) -- a typical rough figure for liquid ETFs/large
+#   caps, not instrument-specific.
+# - Fills execute against the NEXT bar's open, not the decision bar's own
+#   close (see _simulate in bot/backtest.py) -- the standard fix for
+#   lookahead bias in an event-driven backtest.
 BACKTEST_SLIPPAGE_PCT = 0.0005
+BACKTEST_SPREAD_PCT = 0.0002
 BACKTEST_COMMISSION_PER_TRADE = 0.0
 BACKTEST_MONTHS = 6

@@ -95,6 +95,7 @@ class CombinedBacktestResult:
     equity_curve: list[float] = field(default_factory=list)
     timestamps: list = field(default_factory=list)
     per_symbol_trade_counts: dict = field(default_factory=dict)
+    per_symbol_pnl: dict = field(default_factory=dict)
 
 
 def _empty_result(symbol: str, strategy_name: str, initial_equity: float) -> BacktestResult:
@@ -121,10 +122,15 @@ def _empty_result(symbol: str, strategy_name: str, initial_equity: float) -> Bac
 
 
 def _fill_price(price: float, action: str) -> float:
-    """action is the side actually executed for this fill: 'buy' or 'sell'."""
+    """action is the side actually executed for this fill: 'buy' or 'sell'.
+    Combines adverse slippage (price impact/movement between decision and
+    execution) with half the bid-ask spread (the cost of crossing the
+    spread on a market order) -- two distinct real costs modeled
+    separately, per the realistic-costs checklist item."""
+    total_pct = config.BACKTEST_SLIPPAGE_PCT + (config.BACKTEST_SPREAD_PCT / 2)
     if action == "buy":
-        return price * (1 + config.BACKTEST_SLIPPAGE_PCT)
-    return price * (1 - config.BACKTEST_SLIPPAGE_PCT)
+        return price * (1 + total_pct)
+    return price * (1 - total_pct)
 
 
 async def _fetch_prepared_bars(broker, strategy_name: str, symbol: str, months: int) -> pd.DataFrame:
@@ -142,9 +148,16 @@ async def _fetch_prepared_bars(broker, strategy_name: str, symbol: str, months: 
     return bars
 
 
-async def _open_sim_position(sim: Portfolio, signal, symbol: str, strategy_name: str, atr_val: float, qty: float) -> None:
+async def _open_sim_position(
+    sim: Portfolio, signal, symbol: str, strategy_name: str, atr_val: float, qty: float,
+    reference_price: float, reference_timestamp,
+) -> None:
+    """reference_price/reference_timestamp are the actual fill reference
+    (delayed one bar from the decision bar -- see _simulate), not
+    signal.price/signal.timestamp (which is when the decision was made,
+    not when it could realistically execute)."""
     action = "buy" if signal.action == "long" else "sell"
-    fill_price = _fill_price(signal.price, action)
+    fill_price = _fill_price(reference_price, action)
     atr_mult = config.INSTRUMENTS[symbol]["params"].get("trailing_atr_mult", 2.0)
     position = Position(
         symbol=symbol,
@@ -152,7 +165,7 @@ async def _open_sim_position(sim: Portfolio, signal, symbol: str, strategy_name:
         side=signal.action,
         qty=qty,
         entry_price=fill_price,
-        entry_time=signal.timestamp,
+        entry_time=reference_timestamp,
         atr_at_entry=atr_val,
         trailing_stop_price=risk_manager.initial_trailing_stop(fill_price, atr_val, signal.action, atr_mult),
         hard_stop_price=risk_manager.hard_stop_price(fill_price, signal.action, sim.equity, qty),
@@ -204,12 +217,27 @@ async def _simulate(symbol_bars: dict[str, pd.DataFrame], initial_equity: float)
         atr_val = float(row["atr"]) if not pd.isna(row["atr"]) else None
         last_price[symbol] = price
 
+        # Execution delay: a real fill happens after the decision bar
+        # closes, not instantly at that bar's close price -- use the NEXT
+        # bar's open as the fill reference (the standard fix for lookahead
+        # bias in event-driven backtests). Falls back to the current bar's
+        # close only at the very last bar in the dataset, where there's no
+        # next bar to fill against. Decision-making (evaluate() above)
+        # still only ever sees data through the current bar -- only the
+        # fill price/timestamp shifts forward.
+        if idx + 1 < len(bars):
+            fill_ref_price = float(bars.iloc[idx + 1]["open"])
+            fill_ref_timestamp = bars.index[idx + 1]
+        else:
+            fill_ref_price = price
+            fill_ref_timestamp = timestamp
+
         position = sim.get_position(symbol)
         if position is not None and atr_val is not None:
             atr_mult = config.INSTRUMENTS[symbol]["params"].get("trailing_atr_mult", 2.0)
             risk_manager.update_trailing_stop(position, price, atr_val, atr_mult)
             if risk_manager.stop_triggered(position, price):
-                record = await _close_sim_position(sim, symbol, price, timestamp)
+                record = await _close_sim_position(sim, symbol, fill_ref_price, fill_ref_timestamp)
                 if record:
                     trades.append(record)
                 position = None
@@ -217,19 +245,24 @@ async def _simulate(symbol_bars: dict[str, pd.DataFrame], initial_equity: float)
         signal = module.evaluate(window, symbol, position)
         if signal is not None:
             if signal.action == "exit":
-                record = await _close_sim_position(sim, symbol, signal.price, timestamp)
+                record = await _close_sim_position(sim, symbol, fill_ref_price, fill_ref_timestamp)
                 if record:
                     trades.append(record)
             else:
                 if position is not None and position.side != signal.action:
-                    record = await _close_sim_position(sim, symbol, signal.price, timestamp)
+                    record = await _close_sim_position(sim, symbol, fill_ref_price, fill_ref_timestamp)
                     if record:
                         trades.append(record)
                 if atr_val and not risk_manager.circuit_breaker_tripped(sim) and not risk_manager.is_blocked(sim, signal):
                     kind = config.INSTRUMENTS[symbol]["kind"]
                     qty = risk_manager.position_qty(sim.equity, atr_val, kind)
                     if qty > 0:
-                        await _open_sim_position(sim, signal, symbol, strategy_name, atr_val, qty)
+                        prospective_hard_stop = risk_manager.hard_stop_price(fill_ref_price, signal.action, sim.equity, qty)
+                        new_risk_dollars = abs(fill_ref_price - prospective_hard_stop) * qty
+                        if not risk_manager.would_exceed_portfolio_risk_cap(sim, new_risk_dollars):
+                            await _open_sim_position(
+                                sim, signal, symbol, strategy_name, atr_val, qty, fill_ref_price, fill_ref_timestamp
+                            )
 
         sim.mark_to_market(last_price)
         timestamps.append(timestamp)
@@ -382,14 +415,56 @@ async def _run_combined_from_bars(
     sim, trades, timestamps = await _simulate(symbol_bars, initial_equity)
     stats = _compute_stats(trades, sim.equity_curve, initial_equity, timestamps)
     per_symbol_trade_counts: dict[str, int] = {}
+    per_symbol_pnl: dict[str, float] = {}
     for t in trades:
         per_symbol_trade_counts[t.symbol] = per_symbol_trade_counts.get(t.symbol, 0) + 1
+        per_symbol_pnl[t.symbol] = per_symbol_pnl.get(t.symbol, 0.0) + t.pnl
     return CombinedBacktestResult(
         equity_curve=sim.equity_curve,
         timestamps=timestamps,
         per_symbol_trade_counts=per_symbol_trade_counts,
+        per_symbol_pnl=per_symbol_pnl,
         **stats,
     )
+
+
+def compute_correlation_matrix(symbol_bars: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Pairwise correlation of each symbol's daily returns, aligned on
+    overlapping calendar days regardless of each symbol's native bar
+    timeframe (15Min/1Hour/4H) -- answers "how much do these actually
+    move together," which the correlation FILTER (SPY+QQQ blocking new
+    BTC longs) only partially captures (#7)."""
+    daily_returns: dict[str, pd.Series] = {}
+    for symbol, bars in symbol_bars.items():
+        if bars.empty:
+            continue
+        daily_close = bars["close"].resample("1D").last().dropna()
+        daily_returns[symbol] = daily_close.pct_change().dropna()
+    if len(daily_returns) < 2:
+        return pd.DataFrame()
+    returns_df = pd.DataFrame(daily_returns)
+    return returns_df.corr()
+
+
+def print_portfolio_risk_report(symbol_bars: dict[str, pd.DataFrame], combined: CombinedBacktestResult) -> None:
+    """Correlation matrix + per-symbol risk contribution to the combined
+    portfolio -- the actual answer to "how correlated are these strategies
+    and how much risk does each one contribute" (#7), not just the
+    single-symbol tables above."""
+    corr = compute_correlation_matrix(symbol_bars)
+    print("=== Correlation matrix (daily returns) ===")
+    if corr.empty:
+        print("  not enough overlapping data to compute")
+    else:
+        print(corr.round(2).to_string())
+
+    print("\n=== Per-symbol contribution to combined portfolio ===")
+    total_loss = sum(-pnl for pnl in combined.per_symbol_pnl.values() if pnl < 0)
+    print(f"{'Symbol':10s} {'Trades':>7s} {'Net P&L':>12s} {'% of Total Loss':>16s}")
+    for symbol, pnl in combined.per_symbol_pnl.items():
+        n_trades = combined.per_symbol_trade_counts.get(symbol, 0)
+        loss_share = (-pnl / total_loss * 100) if pnl < 0 and total_loss > 0 else 0.0
+        print(f"{symbol:10s} {n_trades:7d} {pnl:12.2f} {loss_share:15.1f}%")
 
 
 async def run_backtest(
@@ -518,6 +593,8 @@ async def run_full_report(
 
     render_equity_curve_chart(combined, per_symbol, path=output_path, months=months)
     print_summary_table(per_symbol, combined, months=months)
+    print()
+    print_portfolio_risk_report(symbol_bars, combined)
     return per_symbol, combined
 
 

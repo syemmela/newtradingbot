@@ -187,6 +187,14 @@ class StrategyRunner:
         hard_stop = risk_manager.hard_stop_price(signal.price, signal.action, self.portfolio.equity, qty)
         trailing_stop = risk_manager.initial_trailing_stop(signal.price, latest_atr, signal.action, atr_mult)
 
+        new_risk_dollars = abs(signal.price - hard_stop) * qty
+        if risk_manager.would_exceed_portfolio_risk_cap(self.portfolio, new_risk_dollars):
+            logger.warning(
+                "%s: blocked by portfolio risk cap (open risk would exceed %.1f%% of equity)",
+                signal.symbol, config.MAX_TOTAL_OPEN_RISK_PCT * 100,
+            )
+            return
+
         position = Position(
             symbol=signal.symbol,
             strategy=self.strategy_name,

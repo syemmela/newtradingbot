@@ -78,3 +78,28 @@ def is_blocked(portfolio: Portfolio, signal: Signal) -> bool:
 
 def circuit_breaker_tripped(portfolio: Portfolio) -> bool:
     return portfolio.drawdown() >= config.MAX_DRAWDOWN_PCT
+
+
+def open_risk_dollars(portfolio: Portfolio) -> float:
+    """Sum of (entry-to-hard-stop distance * qty) across all open
+    positions -- the total dollar amount at risk if every stop were hit
+    simultaneously. By construction each position's own risk is exactly
+    RISK_PER_TRADE_PCT of the equity at entry (that's what hard_stop_price
+    is built to guarantee), but this sums the actual stored stop distances
+    rather than assuming that invariant, so it stays correct even if
+    sizing logic changes later."""
+    return sum(abs(pos.entry_price - pos.hard_stop_price) * pos.qty for pos in portfolio.positions.values())
+
+
+def would_exceed_portfolio_risk_cap(portfolio: Portfolio, new_position_risk_dollars: float) -> bool:
+    """Would adding a new position with this much dollar risk push total
+    open risk across the whole portfolio past config.MAX_TOTAL_OPEN_RISK_PCT
+    of equity? Distinct from the circuit breaker, which reacts to REALIZED
+    drawdown after the fact -- this caps prospective risk before it's ever
+    realized, so several strategies opening positions at once can't all
+    stack their 1%-per-trade risk into a much larger simultaneous exposure
+    than intended (e.g. 5 positions at 1% each = 5% open risk with no cap)."""
+    if portfolio.equity <= 0:
+        return True
+    projected = open_risk_dollars(portfolio) + new_position_risk_dollars
+    return (projected / portfolio.equity) > config.MAX_TOTAL_OPEN_RISK_PCT
